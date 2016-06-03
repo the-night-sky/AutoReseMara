@@ -1,6 +1,7 @@
 package com.nmt.autoresemara;
 
 import java.io.DataOutputStream;
+import java.io.FileInputStream;
 
 import org.opencv.android.Utils;
 import org.opencv.core.Core;
@@ -14,8 +15,8 @@ import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.PixelFormat;
-import android.os.Environment;
 import android.os.IBinder;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.View.OnClickListener;
@@ -34,9 +35,9 @@ public class ControlService extends Service {
 
 	WindowManager wm;
 	View view;
+	boolean isStart;
 
-	private String fileName = "screen_shot.png";
-	private String filePath = Environment.getExternalStorageDirectory().getPath() + "/";
+	private String fileName = "screen_shot.png";;
 
 	@Override
 	public void onCreate() {
@@ -55,9 +56,15 @@ public class ControlService extends Service {
 		}
 
 		LayoutInflater inflater = LayoutInflater.from(this);
-		WindowManager.LayoutParams params = new WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT,
-				WindowManager.LayoutParams.WRAP_CONTENT, 0, 80, WindowManager.LayoutParams.TYPE_SYSTEM_ALERT,
-				WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT);
+		WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+				WindowManager.LayoutParams.WRAP_CONTENT,
+				WindowManager.LayoutParams.WRAP_CONTENT,
+				0,
+				80,
+				WindowManager.LayoutParams.TYPE_SYSTEM_ALERT,
+				WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+				PixelFormat.TRANSLUCENT
+		);
 		wm = (WindowManager) this.getSystemService(Context.WINDOW_SERVICE);
 		view = inflater.inflate(R.layout.control_service, null);
 
@@ -65,18 +72,30 @@ public class ControlService extends Service {
 		btnStartStop.setOnClickListener(new OnClickListener() {
 			@Override
 			public void onClick(View v) {
+				if (isStart) {
+					stopSelf();
+					return;
+				}
 				screenCap();
 				imageMatch();
+				
+				isStart = true;
+				((Button) v).setText("ストップ");
 			}
 		});
 
 		wm.addView(view, params);
+		isStart = false;
 		return START_STICKY;
 	}
 
 	@Override
 	public void onDestroy() {
-		// TODO Auto-generated method stub
+		wm.removeView(view);
+		wm = null;
+		view = null;
+		process = null;
+
 		super.onDestroy();
 	}
 
@@ -88,8 +107,12 @@ public class ControlService extends Service {
 
 	private void screenCap() {
 		// スクリーンキャプチャ
-		String command = String.format("screencap -p %s/%s", filePath, fileName);
 		try {
+			String command = "";
+			command = String.format("screencap -p %s/%s", getFilesDir().getPath(), fileName);
+			outputStream.writeBytes(command);
+			outputStream.writeBytes("\n");
+			command = String.format("chmod 664 %s/%s", getFilesDir().getPath(), fileName);
 			outputStream.writeBytes(command);
 			outputStream.writeBytes("\n");
 			Thread.sleep(500);
@@ -99,10 +122,19 @@ public class ControlService extends Service {
 	}
 
 	private void imageMatch() {
+		// Bitmap読み込みオプション
+		BitmapFactory.Options opt = new BitmapFactory.Options(); 
+		opt.inScaled = false;
 		// 画像をBitmapで取得
-		Bitmap bitmap1 = BitmapFactory.decodeFile(filePath + fileName);
-		Bitmap bitmap2 = BitmapFactory.decodeFile(filePath + "ss_test_camera.png");
-
+		FileInputStream fis=null;
+		try {
+			fis = openFileInput(fileName);
+		} catch (Exception e1) {
+			e1.printStackTrace();
+		}
+		Bitmap bitmap1 = BitmapFactory.decodeStream(fis);
+		Bitmap bitmap2 = BitmapFactory.decodeResource(getResources(), R.drawable.screen_shot_camera, opt);
+		
 		// Bitmap -> Mat
 		Mat img = new Mat();
 		Utils.bitmapToMat(bitmap1, img);
@@ -120,6 +152,10 @@ public class ControlService extends Service {
 
 		// マッチした画像の位置
 		Core.MinMaxLocResult mmlr = Core.minMaxLoc(result);
+		if (mmlr.maxVal == 0) {
+			Log.d("ControlService#imageMatch", "no match image.");
+			return;
+		}
 		String x = String.valueOf(mmlr.maxLoc.x + (tmpl.rows() / 2));
 		String y = String.valueOf(mmlr.maxLoc.y + (tmpl.cols() / 2));
 
