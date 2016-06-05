@@ -2,6 +2,8 @@ package com.nmt.autoresemara;
 
 import java.io.DataOutputStream;
 import java.io.FileInputStream;
+import java.util.Timer;
+import java.util.TimerTask;
 
 import org.opencv.android.Utils;
 import org.opencv.core.Core;
@@ -14,9 +16,13 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Paint;
 import android.graphics.PixelFormat;
+import android.os.Handler;
 import android.os.IBinder;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.View.OnClickListener;
@@ -37,13 +43,10 @@ public class ControlService extends Service {
 	View view;
 	boolean isStart;
 
-	private String fileName = "screen_shot.png";;
+	Timer timer;
+	Handler hander = new Handler();
 
-	@Override
-	public void onCreate() {
-		// TODO Auto-generated method stub
-		super.onCreate();
-	}
+	private String fileName = "screen_shot.png";
 
 	@Override
 	public int onStartCommand(Intent intent, int flags, int startId) {
@@ -55,32 +58,38 @@ public class ControlService extends Service {
 			e.printStackTrace();
 		}
 
+		wm = (WindowManager) this.getSystemService(Context.WINDOW_SERVICE);
 		LayoutInflater inflater = LayoutInflater.from(this);
+		view = inflater.inflate(R.layout.control_service, null);
+
 		WindowManager.LayoutParams params = new WindowManager.LayoutParams(
 				WindowManager.LayoutParams.WRAP_CONTENT,
 				WindowManager.LayoutParams.WRAP_CONTENT,
 				0,
-				80,
+				0,
 				WindowManager.LayoutParams.TYPE_SYSTEM_ALERT,
 				WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-				PixelFormat.TRANSLUCENT
-		);
-		wm = (WindowManager) this.getSystemService(Context.WINDOW_SERVICE);
-		view = inflater.inflate(R.layout.control_service, null);
+				PixelFormat.TRANSLUCENT);
 
 		Button btnStartStop = (Button) view.findViewById(R.id.start_stop);
 		btnStartStop.setOnClickListener(new OnClickListener() {
 			@Override
 			public void onClick(View v) {
 				if (isStart) {
-					stopSelf();
-					return;
+					timer.cancel();
+					timer = null;
+
+					isStart = false;
+					((Button) v).setText("スタート");
+
+				} else {
+					ScreenCapTimerTask scTimerTask = new ScreenCapTimerTask();
+					timer = new Timer(true);
+					timer.schedule(scTimerTask, 3000);
+
+					isStart = true;
+					((Button) v).setText("ストップ");
 				}
-				screenCap();
-				imageMatch();
-				
-				isStart = true;
-				((Button) v).setText("ストップ");
 			}
 		});
 
@@ -92,8 +101,10 @@ public class ControlService extends Service {
 	@Override
 	public void onDestroy() {
 		wm.removeView(view);
+		view = null;
 		wm = null;
 		view = null;
+		outputStream = null;
 		process = null;
 
 		super.onDestroy();
@@ -101,7 +112,7 @@ public class ControlService extends Service {
 
 	@Override
 	public IBinder onBind(Intent intent) {
-		// TODO Auto-generated method stub
+		
 		return null;
 	}
 
@@ -123,18 +134,27 @@ public class ControlService extends Service {
 
 	private void imageMatch() {
 		// Bitmap読み込みオプション
-		BitmapFactory.Options opt = new BitmapFactory.Options(); 
+		BitmapFactory.Options opt = new BitmapFactory.Options();
 		opt.inScaled = false;
 		// 画像をBitmapで取得
-		FileInputStream fis=null;
-		try {
-			fis = openFileInput(fileName);
-		} catch (Exception e1) {
-			e1.printStackTrace();
+		Bitmap bitmap1 = null;
+		Bitmap bitmap2 = null;
+		// Bitmap取得で失敗したらRetry
+		for (int i = 0; i < 10; i++) {
+			try {
+				FileInputStream fis = openFileInput(fileName);
+				bitmap1 = BitmapFactory.decodeStream(fis);
+				if (bitmap1 != null) {
+					break;
+				}
+				Log.d("ControlService#imageMatch", "bitmap1 is null. try again.");
+				Thread.sleep(500);
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
 		}
-		Bitmap bitmap1 = BitmapFactory.decodeStream(fis);
-		Bitmap bitmap2 = BitmapFactory.decodeResource(getResources(), R.drawable.screen_shot_camera, opt);
-		
+		bitmap2 = BitmapFactory.decodeResource(getResources(), R.drawable.screen_shot_camera, opt);
+
 		// Bitmap -> Mat
 		Mat img = new Mat();
 		Utils.bitmapToMat(bitmap1, img);
@@ -156,14 +176,32 @@ public class ControlService extends Service {
 			Log.d("ControlService#imageMatch", "no match image.");
 			return;
 		}
-		String x = String.valueOf(mmlr.maxLoc.x + (tmpl.rows() / 2));
-		String y = String.valueOf(mmlr.maxLoc.y + (tmpl.cols() / 2));
 
-		TextView touchPostion = (TextView) view.findViewById(R.id.touchPostion);
-		String postion = x + " : " + y;
-		touchPostion.setText(postion);
+		// マッチした部分を四角で囲う
+		WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+				WindowManager.LayoutParams.WRAP_CONTENT,
+				WindowManager.LayoutParams.WRAP_CONTENT,
+				(int) mmlr.maxLoc.x,
+				(int) mmlr.maxLoc.y,
+				WindowManager.LayoutParams.TYPE_SYSTEM_ALERT,
+				WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+				| WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+				| WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+				PixelFormat.TRANSLUCENT);
+		params.gravity = Gravity.TOP | Gravity.LEFT;
+		final Rectangle rect = new Rectangle(getApplicationContext(), tmpl.cols(), tmpl.rows());
+		wm.addView(rect, params);
+		// 四角は3秒後に消す
+		hander.postDelayed(new Runnable() {
+			@Override
+			public void run() {
+				wm.removeView(rect);
+			}
+		}, 3000);
 
 		// マッチした画像の位置をタップ
+		String x = String.valueOf(mmlr.maxLoc.x + (tmpl.rows() / 2));
+		String y = String.valueOf(mmlr.maxLoc.y + (tmpl.cols() / 2));
 		String command = String.format("adb shell input tap %s %s", x, y);
 		try {
 			outputStream.writeBytes(command);
@@ -171,5 +209,49 @@ public class ControlService extends Service {
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
+		TextView touchPostion = (TextView) view.findViewById(R.id.touchPostion);
+		String postion = x + " : " + y;
+		touchPostion.setText(postion);
+	}
+
+	class ScreenCapTimerTask extends TimerTask {
+		@Override
+		public void run() {
+			hander.post(new Runnable() {
+				@Override
+				public void run() {
+					screenCap();
+					imageMatch();
+				}
+			});
+		}
+	}
+
+	class Rectangle extends View {
+		int width;
+		int height;
+		
+		public Rectangle(Context context, int w, int h) {
+			super(context);
+			width = w;
+			height = h;
+		}
+
+		@Override
+		protected void onDraw(Canvas canvas) {
+			super.onDraw(canvas);
+			Paint paint = new Paint();
+			paint.setARGB(255, 255, 30, 30);
+			paint.setStyle(Paint.Style.STROKE);
+			paint.setStrokeWidth(2);
+			canvas.drawRect(1, 1, width - 1, height - 1, paint);
+		}
+
+		@Override
+		protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+			super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+			setMeasuredDimension(width, height);
+		}
+
 	}
 }
