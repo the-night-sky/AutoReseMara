@@ -2,6 +2,9 @@ package com.nmt.autoresemara;
 
 import java.io.DataOutputStream;
 import java.io.FileInputStream;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
 
@@ -28,6 +31,7 @@ import android.view.View;
 import android.view.View.OnClickListener;
 import android.view.WindowManager;
 import android.widget.Button;
+import android.widget.ImageView;
 import android.widget.TextView;
 
 public class ControlService extends Service {
@@ -46,7 +50,16 @@ public class ControlService extends Service {
 	Timer timer;
 	Handler hander = new Handler();
 
-	private String fileName = "screen_shot.png";
+	String fileName = "screen_shot.png";
+	
+	List<Integer> templateList = new ArrayList<Integer>(Arrays.asList(
+			R.drawable.yes,
+			R.drawable.title_logo_1,
+			R.drawable.title_announce_2,
+			R.drawable.title_3,
+			R.drawable.terms_4
+//			R.drawable.screen_shot_camera
+	));
 
 	@Override
 	public int onStartCommand(Intent intent, int flags, int startId) {
@@ -65,11 +78,10 @@ public class ControlService extends Service {
 		WindowManager.LayoutParams params = new WindowManager.LayoutParams(
 				WindowManager.LayoutParams.WRAP_CONTENT,
 				WindowManager.LayoutParams.WRAP_CONTENT,
-				0,
-				0,
 				WindowManager.LayoutParams.TYPE_SYSTEM_ALERT,
 				WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
 				PixelFormat.TRANSLUCENT);
+		params.gravity = Gravity.TOP | Gravity.RIGHT;
 
 		Button btnStartStop = (Button) view.findViewById(R.id.start_stop);
 		btnStartStop.setOnClickListener(new OnClickListener() {
@@ -85,7 +97,7 @@ public class ControlService extends Service {
 				} else {
 					ScreenCapTimerTask scTimerTask = new ScreenCapTimerTask();
 					timer = new Timer(true);
-					timer.schedule(scTimerTask, 3000);
+					timer.schedule(scTimerTask, 0, 3000);
 
 					isStart = true;
 					((Button) v).setText("ストップ");
@@ -112,7 +124,6 @@ public class ControlService extends Service {
 
 	@Override
 	public IBinder onBind(Intent intent) {
-		
 		return null;
 	}
 
@@ -153,27 +164,43 @@ public class ControlService extends Service {
 				e.printStackTrace();
 			}
 		}
-		bitmap2 = BitmapFactory.decodeResource(getResources(), R.drawable.screen_shot_camera, opt);
-
-		// Bitmap -> Mat
 		Mat img = new Mat();
 		Utils.bitmapToMat(bitmap1, img);
-		Mat tmpl = new Mat();
-		Utils.bitmapToMat(bitmap2, tmpl);
 
-		// 比較結果を格納するMatを生成
-		Mat result = new Mat(img.rows() - tmpl.rows() + 1, img.cols() - tmpl.cols() + 1, CvType.CV_32FC1);
+		boolean isMatch = false;
+		Mat tmpl = null;
+		Core.MinMaxLocResult mmlr = null;
+//		bitmap2 = BitmapFactory.decodeResource(getResources(), R.drawable.screen_shot_camera, opt);
+//		ImageView imgTmpl=(ImageView)view.findViewById(R.id.imgTmpl);
+		for (int template : templateList) {
+			bitmap2 = BitmapFactory.decodeResource(getResources(), template, opt);
+//			imgTmpl.setImageBitmap(bitmap2);
+			tmpl = new Mat();
+			Utils.bitmapToMat(bitmap2, tmpl);
 
-		// テンプレートマッチ実行（TM_CCOEFF_NORMED：相関係数＋正規化）
-		Imgproc.matchTemplate(img, tmpl, result, Imgproc.TM_CCOEFF_NORMED);
+			// 比較結果を格納するMatを生成
+			Mat result = new Mat(img.rows() - tmpl.rows() + 1, img.cols() - tmpl.cols() + 1, CvType.CV_32FC1);
 
-		// 結果から相関係数がしきい値以下を削除（０にする）
-		Imgproc.threshold(result, result, 0.8, 1.0, Imgproc.THRESH_TOZERO); // しきい値=0.8
+			// テンプレートマッチ実行（TM_CCOEFF_NORMED：相関係数＋正規化）
+			Imgproc.matchTemplate(img, tmpl, result, Imgproc.TM_CCOEFF_NORMED);
 
-		// マッチした画像の位置
-		Core.MinMaxLocResult mmlr = Core.minMaxLoc(result);
-		if (mmlr.maxVal == 0) {
-			Log.d("ControlService#imageMatch", "no match image.");
+			if (mmlr!=null) {
+				Log.d("ControlService#imageMatch", "matching iamge " + String.valueOf(mmlr.maxVal));
+			}
+			// 結果から相関係数がしきい値以下を削除（０にする）
+			Imgproc.threshold(result, result, 0.8, 1.0, Imgproc.THRESH_TOZERO); // しきい値=0.8
+
+			// マッチした画像の位置
+			mmlr = Core.minMaxLoc(result);
+			if (mmlr.maxVal != 0) {
+				isMatch = true;
+				Log.d("ControlService#imageMatch", "matching iamge " + String.valueOf(template));
+				break;
+			}
+			Log.d("ControlService#imageMatch", "no match iamge " + String.valueOf(template));
+		}
+		// マッチしない場合は終了
+		if (!isMatch) {
 			return;
 		}
 
